@@ -20,6 +20,7 @@ import json
 import re
 from typing import Optional, Type, TypeVar, Union
 
+import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 from loguru import logger
@@ -192,15 +193,49 @@ class LLMService:
                     max_tokens=max_tokens,
                     **kwargs
                 )
-                
+
                 result = response.choices[0].message.content
                 logger.debug(f"LLM response length: {len(result)} chars")
-                
+
+                if self._get_config_value("auto_unload"):
+                    await self._unload_model(str(client.base_url), final_model)
+
                 return result
-        
+
         except Exception as e:
             logger.error(f"LLM call error (model={final_model}, base_url={client.base_url}): {e}")
             raise
+
+    async def _unload_model(self, base_url: str, model_key: str) -> None:
+        mgmt_base = base_url.rstrip("/").removesuffix("/v1")
+        try:
+            async with httpx.AsyncClient(timeout=10) as http:
+                # Find the loaded instance_id for this model
+                r = await http.get(f"{mgmt_base}/api/v1/models")
+                r.raise_for_status()
+                models = r.json().get("models", [])
+                instance_id = None
+                for m in models:
+                    if m.get("key") == model_key:
+                        instances = m.get("loaded_instances", [])
+                        if instances:
+                            instance_id = instances[0].get("id")
+                        break
+
+                if not instance_id:
+                    logger.debug(f"Model {model_key} has no loaded instance, skipping unload")
+                    return
+
+                resp = await http.post(
+                    f"{mgmt_base}/api/v1/models/unload",
+                    json={"instance_id": instance_id}
+                )
+                if resp.status_code == 200:
+                    logger.info(f"✅ Model {model_key} unloaded (instance {instance_id})")
+                else:
+                    logger.warning(f"Unload returned {resp.status_code}: {resp.text}")
+        except Exception as e:
+            logger.warning(f"Auto-unload failed for {model_key}: {e}")
     
     async def _call_with_structured_output(
         self,

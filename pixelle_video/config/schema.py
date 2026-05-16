@@ -24,6 +24,7 @@ class LLMConfig(BaseModel):
     api_key: str = Field(default="", description="LLM API Key")
     base_url: str = Field(default="", description="LLM API Base URL")
     model: str = Field(default="", description="LLM Model Name")
+    auto_unload: bool = Field(default=False, description="Auto-unload model after each local LLM call")
 
 
 class TTSLocalConfig(BaseModel):
